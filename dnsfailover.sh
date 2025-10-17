@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/ash
 
 # Openwrt DNSmasq DNS upstream resolver checker
 # Created to solve priority issue since openwrt does not support priority DNS forward resolvers
@@ -24,8 +24,6 @@ STATE="script_persist.dns_state"
 CONF="test.@dnsmasq[0]"
 
 HOSTS="google.com cloudflare.com microsoft.com akamai.com fastly.com"
-
-DNS=192.168.0.153
 
 TIMEOUT=1
 RETRY=3
@@ -117,21 +115,26 @@ get_cooldown()
 
 probe()
 {
+    local dns="$PRIMARY"
     local success_count=0
-    # local fail_count=0
 
     for host in $HOSTS
     do 
-        query $host
+        query $host $dns
         if [ "$?" -eq 0 ]; then
-            log "Reached $host with $DNS"
+            log "Reached $host with $dns"
             success_count=$(($success_count + 1))
         else
-            log "Cannot reach $host with $DNS"
-            # fail_count=$(($fail_count + 1))
+            log "Cannot reach $host with $dns"
         fi
     done
-    [ "$success_count" -ge "$QUERY_THRESHOLD" ]
+
+    if [ "$success_count" -ge "$QUERY_THRESHOLD" ]; then 
+        return 0
+    else
+        return 1
+    fi
+    return 1
 }
 
 reload_dnsmasq()
@@ -142,17 +145,20 @@ reload_dnsmasq()
 
 last_change=$(get_cooldown)
 now=$(date +%s)
+
+
+
 diff=$(($now-$last_change))
 
-if [ "$diff" -le "$COOLDOWN"]; then
+if [ "$diff" -le "$COOLDOWN" ]; then
     log "It has been $diff since last change"
     exit 0
 fi
 
 # Probe known host
-STATUS=$(probe)
+probe
 
-if [ "$STATUS" -eq 0 ]; then
+if [ "$?" -eq 0 ]; then
     inc_success
 else
     inc_fail
@@ -165,6 +171,7 @@ if [ $(get_active_dns) = "$PRIMARY" ]; then
         log "Upstream set to $ALT"
         reset_success
         reset_fail
+	set_cooldown
         reload_dnsmasq
     fi
 else
@@ -173,10 +180,13 @@ else
         log "Upstream set to $PRIMARY"
         reset_success
         reset_fail
+        set_cooldown
         reload_dnsmasq
     fi
 fi
 
 exit 0
+
+
 
 
