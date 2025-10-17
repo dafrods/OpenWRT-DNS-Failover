@@ -164,7 +164,7 @@ probe()
 
 restart_dnsmasq()
 {
-    service dnsmasq restart
+    service dnsmasq reload
     # echo "Test Reload"
 }
 
