@@ -5,23 +5,28 @@
 # Primary DNS server not expected to run all the time, need fallback to good and trusted provider
 
 # WARN
-# Do not add more than 1 upstream resolvers ie more than 1 "list server 'x.x.x.x' lines", or this script will create strange behaviors and would defeat the scripts purpose of piping every query to Pihole+Unbound Server
+# Do not add more than 1 upstream resolvers ie more than 1 "list server 'x.x.x.x' lines", or this script will create unintended behaviors and would defeat the scripts purpose of piping every query to a Pihole+Unbound or local dns Server
 
 # SETUP
-# Change CONF to point to dhcp and uncomment DNSMASQ RELOAD on deployment
-# cron at every minute
+# Change CONF to point to dhcp and uncomment DNSMASQ RELOAD on reload_dnsmasq func for deployment
+# cron at every 5 minutes
 
 # TODO
-# check if flock is needed, might not since dnsmasq needs to reload
-#   - no, flock not needed, luci does not use flock
+# add cli arg for testing so that users dont have to manually edit the script
+# cli arg timeout and retry
+# add setup script or cli arg function to add states to openwrt and a test dhcp file
+# add error checking
+# add internet down detector
+#       - if all alt dns down, infer that the internet is down
+
 
 PRIMARY='192.168.0.153'
 ALT='1.1.1.1'
 
 STATE="script_persist.dns_state"
 
-# CONF="dhcp.@dnsmasq[0]"
-CONF="test.@dnsmasq[0]"
+CONF="dhcp.@dnsmasq[0]"
+# CONF="test.@dnsmasq[0]" # use the CONF above for deployment
 
 HOSTS="google.com cloudflare.com microsoft.com akamai.com fastly.com"
 
@@ -37,20 +42,28 @@ SUCCESS_THRESHOLD=3
 
 COOLDOWN=300 # Seconds after change 
 
-log()
+DNS_CHECK_RETRIES=5
+LOOP_INTERVAL_SECS=10 # Loop interval
+
+log() 
 {
     logger -t DNSCHECK "$1"
 }
 
 set_primary()
 {
-    uci set "$CONF.server=$PRIMARY"
+    # Old implemetation uses 'uci set' and would keep the network down
+    uci -q delete "$CONF.server"
+    uci add_list "$CONF.server=$PRIMARY"
+    uci commit "$CONF"
     log "Loaded Primary DNS Server: $PRIMARY"
 }
 
 set_alt()
 {
-    uci set "$CONF.server=$ALT"
+    uci -q delete "$CONF.server"
+    uci add_list "$CONF.server=$ALT"
+    uci commit "$CONF"
     log "Loaded Alternative DNS Server: $ALT"
 }
 
@@ -93,13 +106,25 @@ reset_fail()
     uci set "$STATE.fail=0"
 }
 
+reset_counters()
+{
+    reset_fail
+    reset_success
+}
+
 query()
 {
     local host=$1
     local dns=$2
     local output
-    output=$(dig $host "@$dns" A $QUERY_ARGS +short | wc -l)
-    [ "$output" -gt 0 ]
+    local status
+    output=$(dig $host "@$dns" A $QUERY_ARGS +short)
+    status=$?
+    output=$(echo $output | wc -l)
+    if [[ "$output" -gt 0 ]] && [[ "$status" -eq 0 ]]; then
+        return 0
+    fi
+    return 1
 }
 
 set_cooldown()
@@ -122,7 +147,7 @@ probe()
     do 
         query $host $dns
         if [ "$?" -eq 0 ]; then
-            log "Reached $host with $dns"
+            # log "Reached $host with $dns"
             success_count=$(($success_count + 1))
         else
             log "Cannot reach $host with $dns"
@@ -130,60 +155,80 @@ probe()
     done
 
     if [ "$success_count" -ge "$QUERY_THRESHOLD" ]; then 
+        log "Probe OK"
         return 0
-    else
-        return 1
     fi
+    log "Probe BAD"
     return 1
 }
 
-reload_dnsmasq()
+restart_dnsmasq()
 {
-    # service dnsmasq reload
-    echo "Test Reload"
+    service dnsmasq restart
+    # echo "Test Reload"
 }
+
+log "Currently using $(get_active_dns)"
 
 last_change=$(get_cooldown)
 now=$(date +%s)
 
-
-
 diff=$(($now-$last_change))
 
+# Exit if cooldown still in effect
 if [ "$diff" -le "$COOLDOWN" ]; then
-    log "It has been $diff since last change"
+    log "It has been $diff seconds since last change"
     exit 0
 fi
 
-# Probe known host
-probe
+for i in $(seq 1 $DNS_CHECK_RETRIES)
+do
+    log "Starting Probe $i of set $DNS_CHECK_RETRIES..."
+    # Probe known hosts
+    probe
 
-if [ "$?" -eq 0 ]; then
-    inc_success
-else
-    inc_fail
-fi
+    status=$?
 
-# If Upstream set to Primary 
-if [ $(get_active_dns) = "$PRIMARY" ]; then
-    if [ $(get_fail_count) -ge "$FAIL_THRESHOLD" ]; then
-        set_alt
-        log "Upstream set to $ALT"
-        reset_success
+    if [ "$status" -eq 0 ]; then
+        inc_success
         reset_fail
-	set_cooldown
-        reload_dnsmasq
-    fi
-else
-    if [ $(get_success_count) -ge "$SUCCESS_THRESHOLD" ]; then
-        set_primary
-        log "Upstream set to $PRIMARY"
+    else
+        inc_fail
         reset_success
-        reset_fail
-        set_cooldown
-        reload_dnsmasq
     fi
-fi
+
+    # [ $(get_success_count) -gt 1 ] && log "DNS SERVER OK" || log "DNS SERVER BAD"
+
+    # If Upstream set to Primary 
+    if [ $(get_active_dns) = "$PRIMARY" ]; then
+        if [ $(get_fail_count) -ge "$FAIL_THRESHOLD" ]; then
+            set_alt
+            # log "Upstream set to $ALT"
+            reset_counters
+            set_cooldown
+            restart_dnsmasq
+        fi
+    else
+        if [ $(get_success_count) -ge "$SUCCESS_THRESHOLD" ]; then
+            set_primary
+            # log "Upstream set to $PRIMARY"
+            reset_counters
+            set_cooldown
+            restart_dnsmasq
+        fi
+    fi
+
+    [ "$i" -eq $DNS_CHECK_RETRIES ] || sleep $LOOP_INTERVAL_SECS
+done
+
+
+uci commit $STATE # Save State persistance
+
+[ $(get_success_count) -gt 1 ] && log "DNS Server Up"
+
+elapsed_time=$(($(date +%s) - $now))
+
+log "Probe took $elapsed_time seconds"
 
 exit 0
 
