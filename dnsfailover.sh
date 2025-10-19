@@ -10,38 +10,59 @@
 # SETUP
 # Change CONF to point to dhcp and uncomment DNSMASQ RELOAD on reload_dnsmasq func for deployment
 # cron at every 5 minutes
+#       run with flock: flock -n /var/lock/dnsfailover.lock [script path]
+# uses dig, install bind-dig package
 
 # TODO
 # add cli arg for testing so that users dont have to manually edit the script
 # cli arg timeout and retry
 # add setup script or cli arg function to add states to openwrt and a test dhcp file
+# add validation that the script is up
+#   - or that a check at the first invocation that uses the config
 # add error checking
 # add internet down detector
 #       - if all alt dns down, infer that the internet is down
 
+# --------------------------------
+# Network Constants
+# --------------------------------
 
 PRIMARY='192.168.0.153'
 ALT='1.1.1.1'
 
-STATE="script_persist.dns_state"
-
-CONF="dhcp.@dnsmasq[0]"
-# CONF="test.@dnsmasq[0]" # use the CONF above for deployment
-
 HOSTS="google.com cloudflare.com microsoft.com akamai.com fastly.com"
 
+# --------------------------------
+# Config Constants
+# --------------------------------
+
+STATE="script_persist.dns_state"
+CONF="dhcp.@dnsmasq[0]"
+# Test Config
+# CONF="test.@dnsmasq[0]" # use the CONF above for deployment
+
+STATE_PATH=/etc/config/script_persist
+TEST_STATE_PATH=/etc/config/test
+
+
+# --------------------------------
+# Script Constants
+# --------------------------------
+
+# Script Cooldown
+COOLDOWN=300 # Seconds after change 
+
+# Query Logic
 TIMEOUT=1
 RETRY=3
 
 QUERY_THRESHOLD=3
-
 QUERY_ARGS="+timeout=$TIMEOUT +retry=$RETRY"
 
 FAIL_THRESHOLD=3
 SUCCESS_THRESHOLD=3
 
-COOLDOWN=300 # Seconds after change 
-
+# Main Loop Logic
 DNS_CHECK_RETRIES=5
 LOOP_INTERVAL_SECS=10 # Loop interval
 
@@ -53,6 +74,10 @@ log()
 set_primary()
 {
     # Old implemetation uses 'uci set' and would keep the network down
+    # what are the cases where this part would fail
+    # - modifying it in luci? flock is advisory, luci may bypass
+    # - luci race condition?
+    # - statefile not existing
     uci -q delete "$CONF.server"
     uci add_list "$CONF.server=$PRIMARY"
     uci commit "$CONF"
@@ -168,6 +193,13 @@ restart_dnsmasq()
     # echo "Test Reload"
 }
 
+validate_env()
+{
+
+}
+
+validate_env
+
 log "Currently using $(get_active_dns)"
 
 last_change=$(get_cooldown)
@@ -224,7 +256,7 @@ done
 
 uci commit $STATE # Save State persistance
 
-[ $(get_success_count) -gt 1 ] && log "DNS Server Up"
+[ $(get_success_count) -ge 1 ] && log "DNS Server Up"
 
 elapsed_time=$(($(date +%s) - $now))
 
