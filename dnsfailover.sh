@@ -1,4 +1,4 @@
-#!/bin/ash
+#!/bin/sh
 
 # Openwrt DNSmasq DNS upstream resolver checker
 # Created to solve priority issue since openwrt does not support priority DNS forward resolvers
@@ -24,18 +24,18 @@
 #       - if all alt dns down, infer that the internet is down
 # Add debug logging
 
-# --------------------------------
+# -----------------------------------------------
 # Network Constants
-# --------------------------------
+# -----------------------------------------------
 
 PRIMARY='192.168.0.153'
 ALT='1.1.1.1'
 
 HOSTS="google.com cloudflare.com microsoft.com akamai.com fastly.com"
 
-# --------------------------------
+# -----------------------------------------------
 # Config Constants
-# --------------------------------
+# -----------------------------------------------
 
 STATE="script_persist.dns_state"
 CONF="dhcp.@dnsmasq[0]"
@@ -48,9 +48,12 @@ TEST_STATE_PATH=/etc/config/test
 OS="OpenWrt"
 OSINFO="/etc/os-release"
 
-# --------------------------------
+# Log settings
+LOG_TAG="DNSCHECK"
+
+# -----------------------------------------------
 # Script Constants
-# --------------------------------
+# -----------------------------------------------
 
 # Script Cooldown
 COOLDOWN=300 # Seconds after change 
@@ -70,16 +73,21 @@ LOOP_INTERVAL_SECS=10
 FAIL_THRESHOLD=3
 SUCCESS_THRESHOLD=3
 
-# ====================================
+# ===============================================
 
-logd ()
+loge()
 {
-    logger -t 
+    logger -s -t "$LOG_TAG" -p user.err "$1"
+}
+
+logd()
+{
+    logger -t "$LOG_TAG" -p user.debug "$1"
 }
 
 log() 
 { 
-    logger -t DNSCHECK "$1" 
+    logger -t "$LOG_TAG" "$1" 
 }
 
 set_primary()
@@ -206,7 +214,7 @@ restart_dnsmasq()
 
 validate_env()
 {
-    # Run every 5 runs
+    # Run every 5 runs or every run
 
     # Environment checks
     #   - Check if OS is OpenWrt
@@ -264,7 +272,12 @@ validate_state()
 
 }
 
+# ===============================================
+# Main Execution
+# ===============================================
+
 validate_env
+validate_state
 
 log "Currently using $(get_active_dns)"
 
