@@ -22,6 +22,7 @@
 # add error checking
 # add internet down detector
 #       - if all alt dns down, infer that the internet is down
+# Add debug logging
 
 # --------------------------------
 # Network Constants
@@ -44,6 +45,8 @@ CONF="dhcp.@dnsmasq[0]"
 STATE_PATH=/etc/config/script_persist
 TEST_STATE_PATH=/etc/config/test
 
+OS="OpenWrt"
+OSINFO="/etc/os-release"
 
 # --------------------------------
 # Script Constants
@@ -59,16 +62,24 @@ RETRY=3
 QUERY_THRESHOLD=3
 QUERY_ARGS="+timeout=$TIMEOUT +retry=$RETRY"
 
+# Probe Loop
+DNS_CHECK_RETRIES=5
+LOOP_INTERVAL_SECS=10
+
+# Switch Logic
 FAIL_THRESHOLD=3
 SUCCESS_THRESHOLD=3
 
-# Main Loop Logic
-DNS_CHECK_RETRIES=5
-LOOP_INTERVAL_SECS=10 # Loop interval
+# ====================================
+
+logd ()
+{
+    logger -t 
+}
 
 log() 
-{
-    logger -t DNSCHECK "$1"
+{ 
+    logger -t DNSCHECK "$1" 
 }
 
 set_primary()
@@ -195,6 +206,61 @@ restart_dnsmasq()
 
 validate_env()
 {
+    # Run every 5 runs
+
+    # Environment checks
+    #   - Check if OS is OpenWrt
+    #   - Check if 'dig' is installed
+    #       - use 'which'
+    #   - ?Check if 'dnsmasq' is installed?
+    #       - likely not needed, comes preinstalled(?) in OpenWrt 23
+    #   - File Validation not needed here, maybe?
+    #       - State Parameters too, maybe?
+
+    # replace echo with loge(not implemented)
+    #   - does openwrt log support -s like in debian dist?
+    # Separate File Validation and Parameter Validation Later
+
+    # OS Validation
+    # local out
+    # Assume that the hostname is OpenWrt, since it is the default hostname of OpenWrt Devices
+    # out=$(uname -n)
+    # if [ ! "$out" = "$HOSTNAME" ]; then
+    #     echo -e "Environment Incompatible\nMust be an OpenWrt System" >&2
+    #     exit 1
+    # fi
+
+    # if ! head -n 1 "$OSINFO" | grep -q "$OS"; then
+    #     echo -e "Environment Incompatible\nMust be an OpenWrt System" >&2
+    #     exit 1
+    # fi
+
+    if ! grep -q -m 1 "$OS" "$OSINFO"; then
+        echo -e "Environment Incompatible\nMust be an OpenWrt System" >&2
+        exit 1
+    fi
+
+    if ! which dig >/dev/null 2>&1 ; then
+        echo -e "'dig' not found\nInstall bind-dig package on luci or run 'opkg update && opkg install bind-dig'" >&2
+        exit 1
+    fi
+}
+
+validate_state()
+{
+    # File Validation
+    if [ ! -f "$STATE_PATH" ]; then
+        echo -e "State Persistence File does not exist\nRun script with --setup or -s args" >&2
+        exit 1
+    fi
+
+    # Parameter Validation
+    # run after file validation or keep them in their own func
+    uci get "$STATE.last_change" > /dev/null 2>&1 || uci set "$STATE.last_change=0"
+    uci get "$STATE.success"     > /dev/null 2>&1 || uci set "$STATE.success=0"
+    uci get "$STATE.fail"        > /dev/null 2>&1 || uci set "$STATE.fail=0"
+    # keep or remove commit, already a commit in end of script
+    # uci commit $STATE
 
 }
 
